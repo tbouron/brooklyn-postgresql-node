@@ -22,10 +22,12 @@ brooklyn.catalog:
   name: PostgreSQL Node
   description: PostgreSQL is an object-relational database management system (ORDBMS)
   itemType: template
+  iconUrl: https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg
   license: Apache-2.0
   publish:
     license_code: Apache-2.0
     reference: reference.json
+    qa: catalog.tests.bom
   item:
     services:
     - type: org.apache.brooklyn.entity.database.postgresql.PostgreSqlNode
