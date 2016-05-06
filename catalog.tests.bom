@@ -26,6 +26,15 @@ brooklyn.catalog:
   license_code: Apache-2.0
   license_url: http://www.apache.org/licenses/LICENSE-2.0.txt
   item:
+    brooklyn.parameters:
+    - name: timeout.initialStartup
+      description: The timeout for provisioning, installing and launching the app-under-test.
+      type: org.apache.brooklyn.util.time.Duration
+      default: 20m
+    - name: timeout.runtimeAssertion
+      type: org.apache.brooklyn.util.time.Duration
+      description: The timeout for any other operation (e.g. invoking an effector or waiting for a sensor to be updated)
+      default: 5m
     services:
     - type: brooklyn-postgresql-node
       id: postgresqlnode
@@ -40,7 +49,7 @@ brooklyn.catalog:
       name: PostgreSQL Node tests
       targetId: postgresqlnode
       brooklyn.config:
-        timeout: 15m
+        timeout: $brooklyn:root().config("timeout.runtimeAssertion")
       brooklyn.children:
 
       # Base tests
@@ -50,6 +59,7 @@ brooklyn.catalog:
         - type: org.apache.brooklyn.test.framework.TestSensor
           name: Check PostgreSQL server is up
           sensor: service.isUp
+          timeout: $brooklyn:root().config("timeout.initialStartup")
           assert:
           - equals: true
         - type: org.apache.brooklyn.test.framework.SimpleShellCommandTest
