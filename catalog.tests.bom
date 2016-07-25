@@ -109,7 +109,7 @@ brooklyn.catalog:
           - equals: true
         - type: org.apache.brooklyn.test.framework.SimpleShellCommandTest
           name: Check PostgreSQL process has restarted
-          command: ps -ef | grep [p]ostgres
+          command: ps -ef | grep [p]ostgres | grep -v 'dhclient'
           assertStatus:
             equals: 0
 
@@ -129,7 +129,7 @@ brooklyn.catalog:
           - equals: false
         - type: org.apache.brooklyn.test.framework.SimpleShellCommandTest
           name: Check PostgreSQL process has stopped
-          command: ps -ef | grep [p]ostgres
+          command: ps -ef | grep [p]ostgres | grep -v 'dhclient'
           assertStatus:
             equals: 1
         - type: org.apache.brooklyn.test.framework.TestEffector
@@ -144,6 +144,6 @@ brooklyn.catalog:
           - equals: true
         - type: org.apache.brooklyn.test.framework.SimpleShellCommandTest
           name: Check PostgreSQL process has restarted
-          command: ps -ef | grep [p]ostgres
+          command: ps -ef | grep [p]ostgres | grep -v 'dhclient'
           assertStatus:
             equals: 0
