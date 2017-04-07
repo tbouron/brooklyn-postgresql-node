@@ -17,83 +17,273 @@
 # under the License.
 #
 brooklyn.catalog:
+  version: "1.0.0-SNAPSHOT" # BROOKLYN_POSTGRESQL_VERSION
+  iconUrl: "https://github.com/Postgres.png"
   items:
   - "https://raw.githubusercontent.com/brooklyncentral/common-catalog-utils/master/common-tests/src/main/resources/commontests/common.tests.bom"
-  - id: brooklyn-postgresql-node-tests
-    version: 0.1
-    itemType: template
-    iconUrl: https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg
+  - id: postgresql-node-tests
     name: PostgreSQL Node tests
     description: Test that PostgreSQL Node is running correctly
-    license_code: Apache-2.0
-    license_url: http://www.apache.org/licenses/LICENSE-2.0.txt
+    itemType: template
     item:
-      brooklyn.parameters:
-      - name: timeout.initialStartup
-        description: The timeout for provisioning, installing and launching the app-under-test.
-        type: org.apache.brooklyn.util.time.Duration
-        default: 20m
-      - name: timeout.runtimeAssertion
-        type: org.apache.brooklyn.util.time.Duration
-        description: The timeout for any other operation (e.g. invoking an effector or waiting for a sensor to be updated)
-        default: 5m
       services:
-      - type: brooklyn-postgresql-node
-        id: postgresqlnode
-        name: PostgreSQL Node
+      - type: postgresql-node
+        id: postgresql
         brooklyn.config:
-          datastore.creation.script.contents: |
-            CREATE DATABASE temporary;
-            USE temporary;
-            CREATE TABLE users (name VARCHAR(20), owner VARCHAR(20), creation_date DATE, updated_date DATE);
-            INSERT INTO users VALUES ('mysql', 'mysql', CURRENT_DATE, CURRENT_DATE)
+          postgresql.initial.command: |
+            CREATE TABLE guestbook (visitor_email text, vistor_id serial, date timestamp, message text);
+            INSERT INTO guestbook (visitor_email, date, message) VALUES ( 'jim@gmail.com', current_date, 'This is a test.');
+          postgresql.config.admin.username: hello
+          postgresql.config.admin.password: world
+          postgresql.config.maxConnections: 500
+          postgresql.config.http.port: 2345
       - type: test-case
-        name: PostgreSQL Node tests
+        name: PostgreSQL Node Tests
         brooklyn.config:
-          targetId: postgresqlnode
-          timeout: $brooklyn:root().config("timeout.runtimeAssertion")
+          targetId: postgresql
+          timeout: 1h
         brooklyn.children:
-        - type: assert-up-and-running-initial
-          name: "1. Node up and running"
-        - type: assert-up-and-running-initial
-          name: "2. App up and running"
         - type: test-case
-          name: "3. Verify PostgreSQL install"
+          name: "1. Config and Sensors Tests"
           brooklyn.children:
-          - type: org.apache.brooklyn.test.framework.SimpleShellCommandTest
-            name: Check PostgreSQL creating script has been executed
-            command: $brooklyn:formatString("psql -U postgres -p %s -qtA -c 'SELECT count(*) FROM users'", $brooklyn:entity("postgresqlnode").attributeWhenReady("postgresql.port"))
-            assertStatus:
-              equals: 0
-            assertOut:
-              equals: "1"
-            assertErr:
-              isEmpty: true
-        # Effector: executeScript Tests
-        - type: test-case
-          name: "4. Effector: executeScript Tests"
-          brooklyn.children:
-          - type: org.apache.brooklyn.test.framework.TestEffector
-            name: Invoke executeScript Effector
-            effector: executeScript
-            params:
-              commands: |
-                USE temporary;
-                INSERT INTO users VALUES ('root', 'root', CURRENT_DATE, CURRENT_DATE);
-          - type: org.apache.brooklyn.test.framework.SimpleShellCommandTest
-            name: Check PostgreSQL creating script has been executed
-            command: $brooklyn:formatString("psql -U postgres -p %s -qtA -c 'SELECT count(*) FROM users'", $brooklyn:entity("postgresqlnode").attributeWhenReady("postgresql.port"))
-            assertStatus:
-              equals: 0
-            assertOut:
-              matches: "2"
-            assertErr:
-              isEmpty: true
-        - type: assert-restart-process
-          name: "5. restart process"
-          brooklyn.config:
-            process.grep.name: "[Pp]ostgres"
+          - type: assert-up-and-running-initial
+            name: "1.1 Node up and running"
+          - type: assert-sensor
+            name: "1.2 Assert PostgreSQL Admin Username"
+            brooklyn.config:
+              sensor: postgresql.admin.username
+              assert:
+                equals: hello
+          - type: assert-sensor
+            name: "1.3 Assert PostgreSQL Admin Password"
+            brooklyn.config:
+              sensor: postgresql.admin.password
+              assert:
+                equals: world
+          - type: assert-sensor
+            name: "1.4 Assert PostgreSQL HTTP Port"
+            brooklyn.config:
+              sensor: postgresql.http.port
+              assert:
+                equals: 2345
+          - type: test-ssh-succeeds
+            name: "1.5 Assert PostgreSQL Max Connections"
+            brooklyn.config:
+              command: sudo -u postgres augtool -Ast 'Postgresql incl /var/lib/pgsql/data/postgresql.conf' get /files/var/lib/pgsql/data/postgresql.conf/max_connections
+              assert:
+                contains: 500
+          - type: test-ssh-succeeds
+            name: "1.6 Assert PostgreSQL Initial Command"
+            brooklyn.config:
+              command: psql -U postgres -t -c "SELECT count(*) FROM guestbook;"
+              assert:
+                matches: \s*1\s*
         - type: assert-stop-and-restart-process
-          name: "6. stop and restart process"
+          name: "2. Effector Restart, Stop & Restart Tests"
           brooklyn.config:
-            process.grep.name: "[Pp]ostgres"
+            process.grep.name: "[p]ostgres"
+        - type: test-case
+          name: "3. Effector createNewUser Tests"
+          brooklyn.config:
+            username: guest
+            password: Pa55w0rd
+            role: CREATEDB
+          brooklyn.children:
+          - type: invoke-effector
+            name: "3.1 Invoke createNewUser"
+            effector: createNewUser
+            brooklyn.config:
+              params:
+                username: $brooklyn:config("username")
+                password: $brooklyn:config("password")
+                role: $brooklyn:config("role")
+          - type: test-ssh-succeeds
+            name: "3.2 Assert user has been created"
+            brooklyn.config:
+              command:
+                $brooklyn:formatString:
+                  - psql -U postgres -t -c "SELECT count(*) FROM pg_user WHERE usename='%s';"
+                  - $brooklyn:config("username")
+              assertOut:
+                matches: \s*1\s*
+        - type: test-case
+          name: "4. Effector createNewDatabase Tests"
+          brooklyn.config:
+            name: comments
+            owner: guest
+          brooklyn.children:
+          - type: invoke-effector
+            name: "4.1 Invoke createNewDatabase"
+            effector: createNewDatabase
+            brooklyn.config:
+              params:
+                name: $brooklyn:config("name")
+                owner: $brooklyn:config("owner")
+          - type: test-ssh-succeeds
+            name: "4.2 Assert database has been created"
+            brooklyn.config:
+              command:
+                $brooklyn:formatString:
+                  - psql -U postgres -t -c "SELECT count(*) FROM pg_database WHERE datname='%s';"
+                  - $brooklyn:config("name")
+              assertOut:
+                matches: \s*1\s*
+        - type: test-case
+          name: "5. Effector executeSqlStatement Tests"
+          brooklyn.config:
+            statement: INSERT INTO guestbook (visitor_email, date, message) VALUES ('jim@gmail.com', current_date, 'Now we are replicating.');
+          brooklyn.children:
+          - type: invoke-effector
+            name: "5.1 Invoke executeSqlStatement"
+            effector: executeSqlStatement
+            brooklyn.config:
+              params:
+                statement: $brooklyn:config("statement")
+          - type: test-ssh-succeeds
+            name: "5.2 Assert statement has been executed"
+            brooklyn.config:
+              command: psql -U postgres -t -c "SELECT count(*) FROM guestbook;"
+              assertOut:
+                matches: \s*2\s*
+        - type: test-case
+          name: "6. Effector addRemoteConnection Tests"
+          brooklyn.config:
+            type: host
+            database: guestbook
+            user: guest
+            address: 10.10.10.10/32
+            method: password
+          brooklyn.children:
+          - type: invoke-effector
+            name: "6.1 Invoke addRemoteConnection"
+            effector: addRemoteConnection
+            brooklyn.config:
+              params:
+                type: $brooklyn:config("type")
+                database: $brooklyn:config("database")
+                user: $brooklyn:config("user")
+                address: $brooklyn:config("address")
+                method: $brooklyn:config("method")
+          - type: test-case
+            name: "6.2 Assert host has been added"
+            brooklyn.children:
+            - type: test-ssh-succeeds
+              name: "6.2.1 Assert type"
+              brooklyn.config:
+                command: |
+                  sudo -u postgres augtool -Ast 'Pg_Hba incl /var/lib/pgsql/data/pg_hba.conf' << EOF
+                  print /files/var/lib/pgsql/data/pg_hba.conf/*[last()]/type
+                  EOF
+                assertOut:
+                  contains: $brooklyn:config("type")
+            - type: test-ssh-succeeds
+              name: "6.2.1 Assert database"
+              brooklyn.config:
+                command: |
+                  sudo -u postgres augtool -Ast 'Pg_Hba incl /var/lib/pgsql/data/pg_hba.conf' << EOF
+                  print /files/var/lib/pgsql/data/pg_hba.conf/*[last()]/database
+                  EOF
+                assertOut:
+                  contains: $brooklyn:config("database")
+            - type: test-ssh-succeeds
+              name: "6.2.1 Assert user"
+              brooklyn.config:
+                command: |
+                  sudo -u postgres augtool -Ast 'Pg_Hba incl /var/lib/pgsql/data/pg_hba.conf' << EOF
+                  print /files/var/lib/pgsql/data/pg_hba.conf/*[last()]/user
+                  EOF
+                assertOut:
+                  contains: $brooklyn:config("user")
+            - type: test-ssh-succeeds
+              name: "6.2.1 Assert address"
+              brooklyn.config:
+                command: |
+                  sudo -u postgres augtool -Ast 'Pg_Hba incl /var/lib/pgsql/data/pg_hba.conf' << EOF
+                  print /files/var/lib/pgsql/data/pg_hba.conf/*[last()]/address
+                  EOF
+                assertOut:
+                  contains: $brooklyn:config("address")
+            - type: test-ssh-succeeds
+              name: "6.2.1 Assert method"
+              brooklyn.config:
+                command: |
+                  sudo -u postgres augtool -Ast 'Pg_Hba incl /var/lib/pgsql/data/pg_hba.conf' << EOF
+                  print /files/var/lib/pgsql/data/pg_hba.conf/*[last()]/method
+                  EOF
+                assertOut:
+                  contains: $brooklyn:config("method")
+
+  - id: postgresql-ha-tests
+    name: PostgreSQL HA tests
+    description: Test that PostgreSQL HA is running correctly
+    itemType: template
+    item:
+      services:
+      - type: postgresql-ha
+        id: postgresql-ha
+        brooklyn.config:
+          postgresql.config.replication.username: hello
+          postgresql.config.replication.password: world
+          cluster.initial.size: 2
+      - type: test-case
+        name: PostgreSQL HA Tests
+        brooklyn.config:
+          targetId: postgresql-ha
+          timeout: 1h
+        brooklyn.children:
+        - type: test-case
+          name: "1. Config and Sensors Tests"
+          brooklyn.children:
+          - type: assert-up-and-running-initial
+            name: "1.1 Node up and running"
+          - type: assert-sensor
+            name: "1.2 Assert PostgreSQL Replication Username"
+            brooklyn.config:
+              sensor: postgresql.replication.username
+              assert:
+                equals: hello
+          - type: assert-sensor
+            name: "1.3 Assert PostgreSQL Replication Password"
+            brooklyn.config:
+              sensor: postgresql.replication.password
+              assert:
+                equals: world
+        - type: test-case
+          name: "2. Effector resize Tests"
+          brooklyn.config:
+            desiredSize: 3
+          brooklyn.children:
+          - type: invoke-effector
+            name: "2.1 Invoke resize"
+            effector: resize
+            brooklyn.config:
+              params:
+                desiredSize: $brooklyn:config("desiredSize")
+          - type: assert-sensor
+            name: "2.2 Assert cluster size increased to 3"
+            sensor: group.members.count
+            assert:
+              equals: $brooklyn:config("desiredSize")
+        - type: test-case
+          name: "3. Replication Tests"
+          brooklyn.config:
+            statement: |
+              CREATE TABLE guestbook (visitor_email text, vistor_id serial, date timestamp, message text);
+              INSERT INTO guestbook (visitor_email, date, message) VALUES ( 'jim@gmail.com', current_date, 'This is a test.');
+          brooklyn.children:
+          - type: invoke-effector
+            name: "3.1 Add data on master node"
+            effector: executeSqlStatement
+            brooklyn.config:
+              target: $brooklyn:component($brooklyn:component("postgresql-ha").attributeWhenReady("cluster.first.entity"))
+              params:
+                statement: $brooklyn:config("statement")
+          - type: loop-test-case
+            name: "3.2 Assert data is replication on all nodes"
+            testSpec:
+              $brooklyn:entitySpec:
+                type: test-ssh-succeeds
+                brooklyn.config:
+                  command: psql -U postgres -t -c "SELECT count(*) FROM guestbook;"
+                  assert:
+                    matches: \s*1\s*
